@@ -78,7 +78,7 @@ uv_buf_t alloc_buffer(uv_handle_t*handle, size_t suggested_size){
     return uv_buf_init((char*) malloc(suggested_size), suggested_size);
 }
 
-void send_data_msg(struct neighbour* np, int sum, size_t len){
+void send_data_msg(int sum, size_t len){
     struct data buf;
     strlcpy(buf.src, name, MAX_NAME);
     buf.type = MSG_DA;
@@ -88,7 +88,7 @@ void send_data_msg(struct neighbour* np, int sum, size_t len){
     return;
 }
 
-void send_na_msg(struct neighbour* np){
+void send_na_msg(){
     /* these are always headed to a partner*/ 
     struct data buf;
     strlcpy(buf.src, name, MAX_NAME);
@@ -101,7 +101,9 @@ void send_ra_msg(){
     struct data buf;
     strlcpy(buf.src, name, MAX_NAME);
     buf.type = MSG_RA;
-    // FIXME buf.u;
+    buf.u.ra.hops = route.hops == -1 ? route.hops:route.hops+1;
+    buf.u.ra.seq = route.seq;
+    neighbour_bcast_msg(&buf);
 }
 
 void deal_with_msg(struct neighbour* np, const struct data* buf){
@@ -135,10 +137,9 @@ void deal_with_msg(struct neighbour* np, const struct data* buf){
             }
             else {
                 /* normal node */
-                /* combine with own, then transmit and clear */
-                send_data_msg(np, data.sum + buf->u.da.sum, data.samples + buf->u.da.samples);
-                data.sum = 0;
-                data.samples = 0;
+                /* combine with own, it'll be transmitted on interval*/
+                data.sum += buf->u.da.sum; 
+                data.samples += buf->u.da.samples;
             }
 
         case MSG_RQ:
@@ -184,7 +185,7 @@ static void on_connect(uv_connect_t* req, int status){
     /* accept this connection and let work happen with it */
     uv_read_start((uv_stream_t*)&np->pipe, alloc_buffer, recv_data);
     /* send a NA */
-    send_na_msg(np);
+    send_na_msg();
 }
 
 static void on_listen_connect(uv_stream_t* req, int status){
@@ -200,13 +201,18 @@ static void on_listen_connect(uv_stream_t* req, int status){
 
 static void data_sender(uv_timer_t* handle, int status){
     printf("Sending data\n");
+    send_data_msg(data.sum, data.samples);
+    data.sum = 0;
+    data.samples = 0;
 }
-#if 0
+
 static void tempsensor(uv_timer_t* handle, int status){
     /* temperature callback fakes a temperature */
-    printf("Temperature is 4 from node %u\n", *(unsigned *)handle->data);
+    int r = rand() % 100; /* temperatures between 0 and 99 */
+    data.sum+=r;
+    data.samples++;
+    printf("Temperature is %d count:%lu sum:%d", r, data.samples, data.sum); 
 }
-#endif
 
 int neighbour_bcast_msg(const struct data* data){
     struct neighbour* np;
@@ -259,12 +265,10 @@ int node_run(const char* id, bool gw){
     printf("Launching node %s\n", id);
 
     /* register temperature sensor callbacks */
-#if 0
+    srand(time(0));
     uv_timer_t sensor_sim;
-    sensor_sim.data = &id;
     uv_timer_init(loop, &sensor_sim);
-    uv_timer_start(&sensor_sim, &tempsensor, 0,1000);
-#endif
+    uv_timer_start(&sensor_sim, &tempsensor, 0,100);
     /* periodically send data to parent */
     uv_timer_t send_data;
     send_data.data = &id;
